@@ -2,11 +2,21 @@ import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 import type { Database } from '@/types';
 
+function isSupabaseConfigured(): boolean {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  return !!(url && !url.includes('YOUR_PROJECT_REF') && key && !key.includes('YOUR_ANON_KEY'));
+}
+
 // Middleware runs on every request to refresh the Supabase auth session.
 // This is required for SSR — without it, server components will see a stale/null session.
 // The middleware MUST be able to set cookies (unlike server components).
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
+
+  if (!isSupabaseConfigured()) {
+    return supabaseResponse;
+  }
 
   const supabase = createServerClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
