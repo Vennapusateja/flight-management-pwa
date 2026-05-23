@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --font-outfit: 'Outfit', sans-serif;
+  }
+
+  * {
+    @apply border-slate-800;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    font-family: var(--font-outfit), system-ui, sans-serif;
+    background: linear-gradient(135deg, #f0f9ff 0%, #ffffff 100%);
+    background-attachment: fixed;
+    @apply text-slate-100;
+  }
+
+  /* Prevent layout shift from scrollbar */
+  html {
+    overflow-y: scroll;
+  }
+}
+
+@layer utilities {
+  /* Glassmorphism cloud card */
+  .glass-card {
+    @apply rounded-2xl border border-slate-800/80 bg-slate-900/80 backdrop-blur-lg shadow-lg shadow-sky-900/5;
+  }
+
+  /* Glow effect for active elements */
+  .glow-indigo {
+    box-shadow: 0 0 20px 0 rgba(14, 165, 233, 0.15);
+  }
+
+  /* Tabular number display for prices and times */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+  }
+}
