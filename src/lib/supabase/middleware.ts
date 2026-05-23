@@ -1,6 +1,4 @@
-import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
-import type { Database } from '@/types';
 
 function isSupabaseConfigured(): boolean {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -14,11 +12,17 @@ function isSupabaseConfigured(): boolean {
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
 
+  // If Supabase is not configured, skip auth session refresh entirely.
+  // This prevents Edge Runtime crashes from importing @supabase/ssr
+  // when environment variables are missing or contain placeholders.
   if (!isSupabaseConfigured()) {
     return supabaseResponse;
   }
 
-  const supabase = createServerClient<Database>(
+  // Dynamic import so @supabase/ssr is only loaded when actually needed
+  const { createServerClient } = await import('@supabase/ssr');
+
+  const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
@@ -26,13 +30,13 @@ export async function updateSession(request: NextRequest) {
         getAll() {
           return request.cookies.getAll();
         },
-        setAll(cookiesToSet: Array<{ name: string; value: string; options: CookieOptions }>) {
+        setAll(cookiesToSet: Array<{ name: string; value: string; options: Record<string, unknown> }>) {
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
           );
           supabaseResponse = NextResponse.next({ request });
           cookiesToSet.forEach(({ name, value, options }) => {
-            supabaseResponse.cookies.set(name, value, options);
+            supabaseResponse.cookies.set(name, value, options as Record<string, unknown>);
           });
         },
       },
