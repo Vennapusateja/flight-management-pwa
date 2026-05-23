@@ -1,10 +1,28 @@
-import fs from 'fs';
-import path from 'path';
 import type { Flight, Seat, Booking, FlightStatus, SeatClass, SeatStatus } from '@/types';
 
-// Path to persist local mock database
-const MOCK_DB_DIR = 'C:\\Users\\Admin\\.gemini\\antigravity-ide\\brain\\21b492a5-d640-491c-b06e-411f04966c53\\scratch';
-const MOCK_DB_FILE = path.join(MOCK_DB_DIR, 'mock_db.json');
+// Determine storage directory based on environment.
+// On Vercel (Linux), use /tmp. On local Windows dev, use the original path.
+// If neither works, fall back to pure in-memory (no persistence).
+function getMockDbPath(): { dir: string; file: string } | null {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+
+    // Check if we're on Vercel / Linux
+    if (process.platform !== 'win32') {
+      const dir = '/tmp/mock_db';
+      return { dir, file: path.join(dir, 'mock_db.json') };
+    }
+
+    // Local Windows dev
+    const dir = 'C:\\Users\\Admin\\.gemini\\antigravity-ide\\brain\\21b492a5-d640-491c-b06e-411f04966c53\\scratch';
+    return { dir, file: path.join(dir, 'mock_db.json') };
+  } catch {
+    return null; // fs/path not available — pure in-memory mode
+  }
+}
+
+const DB_PATH = getMockDbPath();
 
 interface PersistedState {
   flights: Record<string, Flight>;
@@ -15,24 +33,22 @@ interface PersistedState {
 // Global cached in-memory state as a fallback
 let cachedState: PersistedState | null = null;
 
-function ensureDirExists(dirPath: string) {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
-  }
-}
-
 function loadState(): PersistedState {
-  try {
-    ensureDirExists(MOCK_DB_DIR);
-    if (fs.existsSync(MOCK_DB_FILE)) {
-      const data = fs.readFileSync(MOCK_DB_FILE, 'utf8');
-      const parsed = JSON.parse(data);
-      // Synchronize in-memory cache and return
-      cachedState = parsed;
-      return parsed;
+  if (DB_PATH) {
+    try {
+      const fs = require('fs');
+      if (!fs.existsSync(DB_PATH.dir)) {
+        fs.mkdirSync(DB_PATH.dir, { recursive: true });
+      }
+      if (fs.existsSync(DB_PATH.file)) {
+        const data = fs.readFileSync(DB_PATH.file, 'utf8');
+        const parsed = JSON.parse(data);
+        cachedState = parsed;
+        return parsed;
+      }
+    } catch (err) {
+      console.error('Failed to load mock database from file, falling back to memory:', err);
     }
-  } catch (err) {
-    console.error('Failed to load mock database from file, falling back to memory:', err);
   }
 
   if (cachedState) return cachedState;
@@ -47,11 +63,16 @@ function loadState(): PersistedState {
 
 function saveState(state: PersistedState) {
   cachedState = state;
-  try {
-    ensureDirExists(MOCK_DB_DIR);
-    fs.writeFileSync(MOCK_DB_FILE, JSON.stringify(state, null, 2), 'utf8');
-  } catch (err) {
-    console.error('Failed to save mock database to file:', err);
+  if (DB_PATH) {
+    try {
+      const fs = require('fs');
+      if (!fs.existsSync(DB_PATH.dir)) {
+        fs.mkdirSync(DB_PATH.dir, { recursive: true });
+      }
+      fs.writeFileSync(DB_PATH.file, JSON.stringify(state, null, 2), 'utf8');
+    } catch (err) {
+      console.error('Failed to save mock database to file:', err);
+    }
   }
 }
 
