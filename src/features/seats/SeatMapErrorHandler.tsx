@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import React, { useState, type ReactNode } from 'react';
 
 // Error handler wrapper for the SeatMap component.
 // Provides an onError callback that renders an alert toast.
@@ -8,17 +8,13 @@ import { useState, type ReactNode } from 'react';
 export function SeatMapErrorHandler({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
 
-  const childWithError = typeof children === 'object' && children !== null
-    ? // Clone the child, injecting the onError prop
-      // This works because SeatMap accepts onError
-      { ...children as React.ReactElement, props: {
-          ...(children as React.ReactElement).props,
-          onError: (msg: string) => {
-            setError(msg);
-            setTimeout(() => setError(null), 5000);
-          },
-        }
-      }
+  const childWithError = React.isValidElement(children)
+    ? React.cloneElement(children, {
+        onError: (msg: string) => {
+          setError(msg);
+          setTimeout(() => setError(null), 5000);
+        },
+      } as any)
     : children;
 
   return (

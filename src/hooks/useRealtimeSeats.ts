@@ -24,12 +24,18 @@ import type { Seat } from '@/types';
 // ============================================================
 export function useRealtimeSeats(flightId: string) {
   const updateSeatFromRealtime = useSeatStore((s) => s.updateSeatFromRealtime);
-  const supabase = useRef(createClient());
+  const supabaseRef = useRef<ReturnType<typeof createClient> | null>(null);
+  if (!supabaseRef.current) {
+    supabaseRef.current = createClient();
+  }
 
   useEffect(() => {
     if (!flightId) return;
 
-    const channel = supabase.current
+    const client = supabaseRef.current;
+    if (!client) return;
+
+    const channel = client
       .channel(`seats:flight:${flightId}`)
       .on(
         'postgres_changes',
@@ -48,7 +54,7 @@ export function useRealtimeSeats(flightId: string) {
       .subscribe();
 
     return () => {
-      void supabase.current.removeChannel(channel);
+      void client.removeChannel(channel);
     };
   }, [flightId, updateSeatFromRealtime]);
 }
