@@ -39,11 +39,13 @@ export function SeatMap({ flightId, initialSeats }: SeatMapProps) {
   const { selectSeat, deselectSeat } = useSeatSelection(flightId);
   const { minutes, seconds, isExpired, isActive } = useLockCountdown();
   const [selectionError, setSelectionError] = useState<string | null>(null);
+  const [mounted, setMounted] = useState(false);
   const sessionId = getOrCreateSessionId();
 
   // Hydrate store with server data once on mount
   useEffect(() => {
     initSeats(initialSeats);
+    setMounted(true);
   }, [initSeats, initialSeats]);
 
   // Subscribe to realtime updates
@@ -143,8 +145,8 @@ export function SeatMap({ flightId, initialSeats }: SeatMapProps) {
                 <SeatButton
                   key={seat.id}
                   seat={seat}
-                  isSelected={selectedSeats.includes(seat.seat_code)}
-                  isMySession={seat.locked_by === sessionId}
+                  isSelected={mounted ? selectedSeats.includes(seat.seat_code) : false}
+                  isMySession={mounted ? (seat.locked_by === sessionId) : false}
                   onSelect={handleSelect}
                   onDeselect={deselectSeat}
                 />
@@ -158,8 +160,8 @@ export function SeatMap({ flightId, initialSeats }: SeatMapProps) {
                 <SeatButton
                   key={seat.id}
                   seat={seat}
-                  isSelected={selectedSeats.includes(seat.seat_code)}
-                  isMySession={seat.locked_by === sessionId}
+                  isSelected={mounted ? selectedSeats.includes(seat.seat_code) : false}
+                  isMySession={mounted ? (seat.locked_by === sessionId) : false}
                   onSelect={handleSelect}
                   onDeselect={deselectSeat}
                 />
@@ -170,7 +172,7 @@ export function SeatMap({ flightId, initialSeats }: SeatMapProps) {
       </div>
 
       {/* Premium Floating Booking Action Summary Bar */}
-      {selectedSeats.length > 0 && (
+      {mounted && selectedSeats.length > 0 && (
         <div className="w-full max-w-md mt-8 p-5 rounded-2xl border border-indigo-900/40 bg-indigo-950/20 backdrop-blur-md flex items-center justify-between gap-4 animate-in fade-in slide-in-from-bottom-3 duration-250">
           <div>
             <p className="text-[10px] uppercase font-bold tracking-wider text-indigo-400">Selected Seats</p>

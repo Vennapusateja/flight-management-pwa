@@ -66,9 +66,19 @@ export function getOrCreateSessionId(): string {
     return 'ssr-temp-session-id';
   }
   const key = 'sa_session_id';
-  const existing = sessionStorage.getItem(key);
-  if (existing) return existing;
-  const newId = crypto.randomUUID();
-  sessionStorage.setItem(key, newId);
-  return newId;
+  try {
+    const existing = sessionStorage.getItem(key);
+    if (existing) return existing;
+    
+    // Fallback for non-secure contexts or older browsers where randomUUID is missing
+    const newId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+      
+    sessionStorage.setItem(key, newId);
+    return newId;
+  } catch (e) {
+    // Fallback if sessionStorage throws (e.g. cookies blocked)
+    return 'fallback-session-id-' + Math.random().toString(36);
+  }
 }
