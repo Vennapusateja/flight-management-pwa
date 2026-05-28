@@ -153,6 +153,26 @@ function generateSeatsForFlight(flightId: string, basePrice: number, savedStates
   return seats;
 }
 
+// ============================================================
+// parseFlightId
+// Extracts origin, destination, flight number and date from the
+// deterministic ID format: {ORG}{DST}{NUM}-{YYYYMMDD}
+// e.g. "DELVTZ203-20260528" → { origin:'DEL', destination:'VTZ',
+//                               number:'203', dateStr:'2026-05-28' }
+// Used to reconstruct flights without needing persisted /tmp state
+// (critical on Vercel where each serverless instance has its own /tmp)
+// ============================================================
+function parseFlightId(id: string): { origin: string; destination: string; number: string; dateStr: string } | null {
+  const match = id.match(/^([A-Z]{3})([A-Z]{3})(\d{3})-(\d{8})$/);
+  if (!match) return null;
+  const origin      = match[1]!;
+  const destination = match[2]!;
+  const number      = match[3]!;
+  const dateCompact = match[4]!;
+  const dateStr = `${dateCompact.slice(0, 4)}-${dateCompact.slice(4, 6)}-${dateCompact.slice(6, 8)}`;
+  return { origin, destination, number, dateStr };
+}
+
 // Generate flights for a route and date if not already generated
 function generateRouteFlights(origin: string, destination: string, dateStr: string): Flight[] {
   const state = loadState();
@@ -209,15 +229,27 @@ export const mockDb = {
   },
 
   getFlightById(id: string): Flight | null {
+    // 1. Try persisted state first (local dev or same Vercel instance)
     const state = loadState();
-    return state.flights[id] || null;
+    if (state.flights[id]) return state.flights[id];
+
+    // 2. Reconstruct from deterministic ID — handles Vercel ephemeral /tmp
+    //    where the flight was generated in a different function instance.
+    const parsed = parseFlightId(id);
+    if (!parsed) return null;
+
+    // Re-running generateRouteFlights will persist all 4 flights for the
+    // route/date, so subsequent lookups within this instance are cached.
+    const flights = generateRouteFlights(parsed.origin, parsed.destination, parsed.dateStr);
+    return flights.find((f) => f.id === id) ?? null;
   },
 
   getSeatsForFlight(flightId: string): Seat[] {
-    const state = loadState();
-    const flight = state.flights[flightId];
+    // Resolve the flight (handles ephemeral /tmp via ID reconstruction)
+    const flight = this.getFlightById(flightId);
     if (!flight) return [];
 
+    const state = loadState();
     const savedStates = state.seatStates[flightId] || {};
     return generateSeatsForFlight(flightId, flight.base_price, savedStates);
   },
