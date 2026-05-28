@@ -1,7 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
-import { createClient } from '@/lib/supabase/client';
+import { useEffect } from 'react';
 import { useSeatStore } from '@/stores/seatStore';
 import type { Seat } from '@/types';
 
@@ -20,41 +19,68 @@ import type { Seat } from '@/types';
 // CHANNEL LIFECYCLE:
 // - Subscribes on mount with the flightId
 // - Unsubscribes on unmount (no memory leaks)
-// - Uses a ref to avoid stale closure issues in the callback
+// - Gracefully skips subscription when Supabase is not configured
 // ============================================================
+
+function isSupabaseConfigured(): boolean {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  return !!(
+    url &&
+    !url.includes('YOUR_PROJECT_REF') &&
+    key &&
+    !key.includes('YOUR_ANON_KEY')
+  );
+}
+
 export function useRealtimeSeats(flightId: string) {
   const updateSeatFromRealtime = useSeatStore((s) => s.updateSeatFromRealtime);
-  const supabaseRef = useRef<ReturnType<typeof createClient> | null>(null);
-  if (!supabaseRef.current) {
-    supabaseRef.current = createClient();
-  }
 
   useEffect(() => {
-    if (!flightId) return;
+    // Skip realtime subscription in mock/dev mode — Supabase not configured
+    if (!flightId || !isSupabaseConfigured()) return;
 
-    const client = supabaseRef.current;
-    if (!client) return;
+    // Dynamic import so @supabase/ssr is only loaded when actually needed.
+    // This prevents a crash when env vars contain placeholder values.
+    let isMounted = true;
+    let cleanup: (() => void) | undefined;
 
-    const channel = client
-      .channel(`seats:flight:${flightId}`)
-      .on(
-        'postgres_changes',
-        {
-          event:  '*',
-          schema: 'public',
-          table:  'seats',
-          filter: `flight_id=eq.${flightId}`,
-        },
-        (payload) => {
-          if (payload.new && typeof payload.new === 'object') {
-            updateSeatFromRealtime(payload.new as Seat);
-          }
-        }
-      )
-      .subscribe();
+    (async () => {
+      try {
+        const { createClient } = await import('@/lib/supabase/client');
+        if (!isMounted) return;
+
+        const client = createClient();
+
+        const channel = client
+          .channel(`seats:flight:${flightId}`)
+          .on(
+            'postgres_changes',
+            {
+              event: '*',
+              schema: 'public',
+              table: 'seats',
+              filter: `flight_id=eq.${flightId}`,
+            },
+            (payload) => {
+              if (payload.new && typeof payload.new === 'object') {
+                updateSeatFromRealtime(payload.new as Seat);
+              }
+            }
+          )
+          .subscribe();
+
+        cleanup = () => {
+          void client.removeChannel(channel);
+        };
+      } catch (err) {
+        console.warn('[useRealtimeSeats] Failed to initialize realtime:', err);
+      }
+    })();
 
     return () => {
-      void client.removeChannel(channel);
+      isMounted = false;
+      cleanup?.();
     };
   }, [flightId, updateSeatFromRealtime]);
 }

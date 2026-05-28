@@ -31,6 +31,11 @@ interface SeatMapProps {
 // It needs Zustand stores, realtime, and click handlers.
 // The parent page (Server Component) fetches the initial seat data
 // and passes it as a prop — so first paint has real data, not empty.
+//
+// HYDRATION STRATEGY:
+// - `mounted` is false during SSR and first render
+// - A loading skeleton is shown until mounted=true + seats are initialized
+// - This prevents the "No seats available" flash on first render
 // ============================================================
 export function SeatMap({ flightId, initialSeats }: SeatMapProps) {
   const router = useRouter();
@@ -48,7 +53,7 @@ export function SeatMap({ flightId, initialSeats }: SeatMapProps) {
     setMounted(true);
   }, [initSeats, initialSeats]);
 
-  // Subscribe to realtime updates
+  // Subscribe to realtime updates (safely skipped when Supabase not configured)
   useRealtimeSeats(flightId);
 
   const handleSelect = async (seatCode: string) => {
@@ -74,6 +79,13 @@ export function SeatMap({ flightId, initialSeats }: SeatMapProps) {
       }));
   }, [seats]);
 
+  // Show a loading skeleton while the store is being hydrated client-side.
+  // This prevents the SSR "No seats available" flash.
+  if (!mounted) {
+    return <SeatMapSkeleton />;
+  }
+
+  // Only shown after mount — we know the store state is real at this point
   if (seats.size === 0) {
     return (
       <div className="flex h-64 items-center justify-center text-slate-500">
@@ -145,8 +157,8 @@ export function SeatMap({ flightId, initialSeats }: SeatMapProps) {
                 <SeatButton
                   key={seat.id}
                   seat={seat}
-                  isSelected={mounted ? selectedSeats.includes(seat.seat_code) : false}
-                  isMySession={mounted ? (seat.locked_by === sessionId) : false}
+                  isSelected={selectedSeats.includes(seat.seat_code)}
+                  isMySession={seat.locked_by === sessionId}
                   onSelect={handleSelect}
                   onDeselect={deselectSeat}
                 />
@@ -160,8 +172,8 @@ export function SeatMap({ flightId, initialSeats }: SeatMapProps) {
                 <SeatButton
                   key={seat.id}
                   seat={seat}
-                  isSelected={mounted ? selectedSeats.includes(seat.seat_code) : false}
-                  isMySession={mounted ? (seat.locked_by === sessionId) : false}
+                  isSelected={selectedSeats.includes(seat.seat_code)}
+                  isMySession={seat.locked_by === sessionId}
                   onSelect={handleSelect}
                   onDeselect={deselectSeat}
                 />
@@ -172,7 +184,7 @@ export function SeatMap({ flightId, initialSeats }: SeatMapProps) {
       </div>
 
       {/* Premium Floating Booking Action Summary Bar */}
-      {mounted && selectedSeats.length > 0 && (
+      {selectedSeats.length > 0 && (
         <div className="w-full max-w-md mt-8 p-5 rounded-2xl border border-indigo-900/40 bg-indigo-950/20 backdrop-blur-md flex items-center justify-between gap-4 animate-in fade-in slide-in-from-bottom-3 duration-250">
           <div>
             <p className="text-[10px] uppercase font-bold tracking-wider text-indigo-400">Selected Seats</p>
@@ -188,6 +200,57 @@ export function SeatMap({ flightId, initialSeats }: SeatMapProps) {
           </Button>
         </div>
       )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────
+// Loading skeleton shown during SSR / pre-hydration
+// Matches the visual shape of the real seat map so there's
+// no layout shift when the real content loads.
+// ────────────────────────────────────────────────────────────
+function SeatMapSkeleton() {
+  return (
+    <div className="flex flex-col items-center gap-6 animate-pulse" aria-busy="true" aria-label="Loading seat map…">
+      {/* Legend skeleton */}
+      <div className="flex flex-wrap items-center justify-center gap-4">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="flex items-center gap-1.5">
+            <div className="h-4 w-4 rounded border border-slate-800 bg-slate-800" />
+            <div className="h-3 w-12 rounded bg-slate-800" />
+          </div>
+        ))}
+      </div>
+
+      {/* Column header skeleton */}
+      <div className="w-full max-w-md">
+        <div className="mb-2 grid grid-cols-[2rem_repeat(3,2rem)_1rem_repeat(3,2rem)] gap-1 px-8">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="h-3 rounded bg-slate-800" />
+          ))}
+        </div>
+
+        {/* Row skeletons — show 10 representative rows */}
+        <div className="flex flex-col gap-1">
+          {Array.from({ length: 10 }).map((_, rowIdx) => (
+            <div
+              key={rowIdx}
+              className="grid grid-cols-[2rem_repeat(3,2rem)_1rem_repeat(3,2rem)] items-center gap-1"
+            >
+              <div className="h-3 w-5 mx-auto rounded bg-slate-800" />
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="h-8 w-8 rounded-t-lg bg-slate-800 border-2 border-slate-700" />
+              ))}
+              <div />
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="h-8 w-8 rounded-t-lg bg-slate-800 border-2 border-slate-700" />
+              ))}
+            </div>
+          ))}
+          {/* Fade-out indicator for more rows */}
+          <div className="h-16 w-full rounded-b-xl bg-gradient-to-b from-slate-900/60 to-transparent" />
+        </div>
+      </div>
     </div>
   );
 }
