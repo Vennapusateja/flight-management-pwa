@@ -1,5 +1,6 @@
 'use server';
 
+import { cookies } from 'next/headers';
 import { createClient } from '@/lib/supabase/server';
 import { checkoutSchema } from '@/lib/validations';
 import type {
@@ -14,6 +15,46 @@ import { mockDb } from '@/lib/mockDb';
 function isSupabaseConfigured(): boolean {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   return !!(url && !url.includes('YOUR_PROJECT_REF'));
+}
+
+// ============================================================
+// Cookie-based booking persistence (mock / dev mode only)
+//
+// WHY COOKIES INSTEAD OF /tmp:
+// Vercel serverless functions are ephemeral — each request can land
+// on a different instance with its own empty /tmp directory.
+// Bookings written to /tmp during checkout are invisible to the
+// /manage page running on a different instance.
+//
+// Browser cookies travel with every request and are instance-independent,
+// making them the correct persistence layer for a stateless demo deployment.
+// ============================================================
+async function getMockBookingsFromCookie(): Promise<Booking[]> {
+  try {
+    const cookieStore = await cookies();
+    const raw = cookieStore.get('sa-mock-bookings')?.value;
+    if (!raw) return [];
+    return JSON.parse(decodeURIComponent(raw)) as Booking[];
+  } catch {
+    return [];
+  }
+}
+
+async function saveMockBookingToCookie(booking: Booking): Promise<void> {
+  try {
+    const existing = await getMockBookingsFromCookie();
+    // Deduplicate by PNR — update status if same booking is re-saved (e.g. cancellation)
+    const updated = [booking, ...existing.filter((b) => b.pnr !== booking.pnr)];
+    const cookieStore = await cookies();
+    cookieStore.set('sa-mock-bookings', encodeURIComponent(JSON.stringify(updated)), {
+      path: '/',
+      maxAge: 60 * 60 * 24 * 30, // 30 days
+      httpOnly: false,
+      sameSite: 'lax',
+    });
+  } catch (e) {
+    console.error('[saveMockBookingToCookie]', e);
+  }
 }
 
 // ============================================================
@@ -50,6 +91,8 @@ export async function getSeatsForFlight(
 // reserveSeats
 // Calls the RPC which performs atomic validation + seat + booking update.
 // Input validated server-side before the RPC call.
+// In mock mode: saves booking to a cookie so it persists across
+// Vercel serverless instances (cross-instance /tmp is not shared).
 // ============================================================
 export async function reserveSeats(
   flightId: string,
@@ -64,8 +107,16 @@ export async function reserveSeats(
 
   // Hybrid Mode Fallback:
   if (!isSupabaseConfigured()) {
-    const totalPrice = seatCodes.length * 1000; // Simulating base calculations for mock
-    return mockDb.reserveSeats(
+    // Calculate total price from real seat data
+    const seats = mockDb.getSeatsForFlight(flightId);
+    const flight = mockDb.getFlightById(flightId);
+    const basePrice = flight?.base_price ?? 3000;
+    const totalPrice = seatCodes.reduce((sum, code) => {
+      const seat = seats.find((s) => s.seat_code === code);
+      return sum + basePrice * (seat?.price_multiplier ?? 1.0);
+    }, 0);
+
+    const result = mockDb.reserveSeats(
       flightId,
       seatCodes,
       sessionId,
@@ -74,6 +125,32 @@ export async function reserveSeats(
       totalPrice,
       parsed.data.passengers
     );
+
+    // Persist the full booking to a cookie so it shows up on /manage
+    // even across different Vercel serverless instances
+    if (result.success && result.pnr && result.booking_id) {
+      const booking: Booking = {
+        id: result.booking_id,
+        user_id: 'mock-user-123',
+        pnr: result.pnr,
+        status: 'Confirmed',
+        total_price: totalPrice,
+        passenger_details: parsed.data.passengers.map((p, i) => ({
+          seat_code: seatCodes[i] ?? '',
+          title: p.title,
+          first_name: p.first_name,
+          last_name: p.last_name,
+          ...(p.passport_number ? { passport_number: p.passport_number } : {}),
+          ...(p.date_of_birth ? { date_of_birth: p.date_of_birth } : {}),
+        })),
+        contact_email: parsed.data.contact_email.toLowerCase(),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      await saveMockBookingToCookie(booking);
+    }
+
+    return result;
   }
 
   const supabase = await createClient();
@@ -111,7 +188,22 @@ export async function cancelBooking(
   bookingId: string
 ): Promise<CancelBookingResult> {
   if (!isSupabaseConfigured()) {
-    return mockDb.cancelBooking(bookingId, 'mock-user-123');
+    const result = mockDb.cancelBooking(bookingId, 'mock-user-123');
+
+    // Update the cookie so /manage shows the cancelled status
+    if (result.success) {
+      const bookings = await getMockBookingsFromCookie();
+      const booking = bookings.find((b) => b.id === bookingId);
+      if (booking) {
+        await saveMockBookingToCookie({
+          ...booking,
+          status: 'Cancelled',
+          updated_at: new Date().toISOString(),
+        });
+      }
+    }
+
+    return result;
   }
 
   const supabase = await createClient();
@@ -137,28 +229,16 @@ export async function cancelBooking(
 
 // ============================================================
 // getUserBookings
+// In mock mode: reads from cookie (cross-instance safe on Vercel).
+// Previously used a hardcoded Windows local path which broke on Vercel.
 // ============================================================
 export async function getUserBookings(): Promise<{
   data: Booking[] | null;
   error: string | null;
 }> {
   if (!isSupabaseConfigured()) {
-    // In hybrid mock mode, return mock bookings stored locally
-    const fs = require('fs');
-    const path = require('path');
-    const dbDir = 'C:\\Users\\Admin\\.gemini\\antigravity-ide\\brain\\21b492a5-d640-491c-b06e-411f04966c53\\scratch';
-    const dbFile = path.join(dbDir, 'mock_db.json');
-    try {
-      if (fs.existsSync(dbFile)) {
-        const fileContent = fs.readFileSync(dbFile, 'utf8');
-        const state = JSON.parse(fileContent);
-        const userBookings = Object.values(state.bookings || {}) as Booking[];
-        return { data: userBookings.reverse(), error: null };
-      }
-    } catch (e) {
-      console.error(e);
-    }
-    return { data: [], error: null };
+    const bookings = await getMockBookingsFromCookie();
+    return { data: bookings, error: null };
   }
 
   const supabase = await createClient();
@@ -185,6 +265,9 @@ export async function getUserBookings(): Promise<{
 // ============================================================
 // getBookingByPnr
 // For PNR lookup — matches pnr + contact_email to prevent enumeration.
+// In mock mode: checks cookie-stored bookings as fallback when
+// mockDb returns null (different Vercel instance than the one
+// that created the booking).
 // ============================================================
 export async function getBookingByPnr(
   pnr: string,
@@ -192,10 +275,27 @@ export async function getBookingByPnr(
 ): Promise<{ data: Booking | null; error: string | null }> {
   console.log('[getBookingByPnr] Incoming request:', { pnr, email });
   if (!isSupabaseConfigured()) {
-    const booking = mockDb.getBookingByPnr(pnr, email);
-    console.log('[getBookingByPnr] Mock DB lookup result:', booking);
-    if (!booking) return { data: null, error: 'Booking not found.' };
-    return { data: booking, error: null };
+    // 1. Try mockDb first (works if same Vercel instance handled booking)
+    const dbBooking = mockDb.getBookingByPnr(pnr, email);
+    if (dbBooking) {
+      console.log('[getBookingByPnr] Found in mockDb');
+      return { data: dbBooking, error: null };
+    }
+
+    // 2. Fall back to cookie (cross-instance lookup)
+    const cookieBookings = await getMockBookingsFromCookie();
+    const cookieBooking = cookieBookings.find(
+      (b) =>
+        b.pnr.toUpperCase() === pnr.toUpperCase() &&
+        b.contact_email.toLowerCase() === email.toLowerCase()
+    );
+
+    if (cookieBooking) {
+      console.log('[getBookingByPnr] Found in cookie');
+      return { data: cookieBooking, error: null };
+    }
+
+    return { data: null, error: 'Booking not found.' };
   }
 
   const supabase = await createClient();
@@ -274,5 +374,3 @@ export async function releaseSeatLockAction(
 
   return { success: true };
 }
-
-
